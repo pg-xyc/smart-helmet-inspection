@@ -1,0 +1,18 @@
+(()=>{
+const $=id=>document.getElementById(id),video=$('live-video'),screen=$('inference-canvas'),state=$('inference-state');
+const captured=document.createElement('canvas'),input=document.createElement('canvas');input.width=input.height=416;const ctx=input.getContext('2d',{willReadFrequently:true}),out=screen.getContext('2d');let worker,ready=false,pending=false,serial=0,epoch=0,frameInfo=null,watchdog;
+function clear(){epoch++;screen.hidden=true;}
+function init(){worker?.terminate();clearTimeout(watchdog);ready=false;pending=false;clear();state.textContent='正在加载识别模型，首次打开需下载…';
+if(location.protocol==='file:'){state.textContent='请将完整文件上传 GitHub Pages，通过 HTTPS 链接打开';return;}
+worker=new Worker(new URL('detect-worker.js',location.href));worker.onerror=()=>{ready=false;pending=false;clearTimeout(watchdog);screen.hidden=true;state.textContent='模型加载失败，请检查上传文件后点击重载模型';};
+worker.onmessage=({data})=>{if(data.type==='ready'){ready=true;state.textContent='模型就绪 · 请开启摄像头';}else if(data.type==='error'){pending=false;clearTimeout(watchdog);screen.hidden=true;state.textContent='识别失败，请重载模型：'+data.message;}else if(data.type==='result'){clearTimeout(watchdog);pending=false;const f=frameInfo;if(!f||data.id!==f.id||f.epoch!==epoch||video.srcObject!==f.source||video.paused)return;
+screen.width=captured.width;screen.height=captured.height;out.drawImage(captured,0,0);for(const b of data.boxes){let [x1,y1,x2,y2]=b.xyxy;x1=Math.max(0,(x1-f.left)/f.scale);x2=Math.min(screen.width,(x2-f.left)/f.scale);y1=Math.max(0,(y1-f.top)/f.scale);y2=Math.min(screen.height,(y2-f.top)/f.scale);if(x2<=x1||y2<=y1)continue;const color=b.cls===7?'#ec6253':b.cls===0?'#00a68c':'#3889df';out.strokeStyle=color;out.lineWidth=2.5;out.strokeRect(x1,y1,x2-x1,y2-y1);out.font='16px sans-serif';const text=b.label+' '+Math.round(b.confidence*100)+'%',w=out.measureText(text).width+10,y=Math.max(20,y1);out.fillStyle=color;out.fillRect(x1,y-20,w,22);out.fillStyle='white';out.fillText(text,x1+5,y-4);}screen.hidden=false;state.textContent=`本机识别 · 未戴帽目标 ${data.boxes.filter(b=>b.cls===7).length} · ${data.ms} ms`;}};
+worker.postMessage({type:'init'});
+}
+function tick(){if(!ready||pending||video.paused||!video.srcObject||!video.videoWidth||document.hidden)return;
+captured.width=Math.min(960,video.videoWidth);captured.height=Math.round(video.videoHeight*captured.width/video.videoWidth);captured.getContext('2d').drawImage(video,0,0,captured.width,captured.height);
+const scale=Math.min(416/captured.width,416/captured.height),w=Math.round(captured.width*scale),h=Math.round(captured.height*scale),left=Math.floor((416-w)/2),top=Math.floor((416-h)/2);ctx.fillStyle='rgb(114,114,114)';ctx.fillRect(0,0,416,416);ctx.drawImage(captured,0,0,captured.width,captured.height,left,top,w,h);const rgba=ctx.getImageData(0,0,416,416).data,pixels=new Float32Array(3*416*416),area=416*416;for(let i=0;i<area;i++){pixels[i]=rgba[i*4]/255;pixels[area+i]=rgba[i*4+1]/255;pixels[area*2+i]=rgba[i*4+2]/255;}
+frameInfo={id:++serial,epoch,source:video.srcObject,left,top,scale};pending=true;worker.postMessage({type:'frame',id:serial,pixels},[pixels.buffer]);watchdog=setTimeout(()=>{worker.terminate();pending=false;ready=false;screen.hidden=true;state.textContent='识别超时，请点击重载模型重试';},30000);
+}
+$('reload-model').onclick=init;video.addEventListener('emptied',clear);video.addEventListener('pause',clear);document.addEventListener('visibilitychange',()=>{if(document.hidden)clear();});window.addEventListener('pagehide',()=>{clear();worker?.terminate();ready=false;});window.addEventListener('pageshow',e=>{if(e.persisted)init();});setInterval(tick,180);init();
+})();
